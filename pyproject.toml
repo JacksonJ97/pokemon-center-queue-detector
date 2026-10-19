@@ -1,13 +1,14 @@
 [project]
 name = "discord-bot-pokemon-center"
 version = "0.1.0"
-description = "Add your description here"
+description = "Detects a potential Pokemon Center queue and alerts users."
 readme = "README.md"
+authors = [
+    { name = "Jackson", email = "jacksonjude97@gmail.com" }
+]
 requires-python = ">=3.12"
 dependencies = []
 
 [tool.pyrefly]
-project-includes = [
-    "**/*.py*",
-    "**/*.ipynb",
-]
+preset = "default"
+project-includes = ["src/**/*.py"]
