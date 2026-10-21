@@ -1,6 +1,24 @@
+import json
 import requests
+from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 URL = "https://www.pokemoncenter.com/en-ca"
+OBSERVATIONS_PATH = Path("logs/observations.jsonl")
+
+
+def log_observation(response: requests.Response):
+    observation = {
+        "timestamp": datetime.now(ZoneInfo("America/Toronto")).isoformat(),
+        "url": response.url,
+        "status": response.status_code,
+        "x_iinfo": response.headers.get("X-Iinfo"),
+        "queue": "off",
+    }
+
+    with OBSERVATIONS_PATH.open("a", encoding="utf-8") as log_file:
+        log_file.write(json.dumps(observation) + "\n")
 
 
 def detect_queue(response: requests.models.Response):
@@ -11,16 +29,17 @@ def detect_queue(response: requests.models.Response):
     print("Response X_Iinfo:", response.headers["X-Iinfo"])
     print("--------------------------------------------------------")
     print("Response Text:", response.text)
-    x_iinfo = response.headers["X-Iinfo"]
+    x_iinfo = response.headers.get("X-Iinfo")
 
-    on = "B12(14,0,0)" not in x_iinfo and "0NNN" in x_iinfo
+    if x_iinfo:
+        on = "B12(14,0,0)" not in x_iinfo and "0NNN" in x_iinfo
 
-    off = "B12(14,0,0)" in x_iinfo and "NNNN" in x_iinfo
+        off = "B12(14,0,0)" in x_iinfo and "NNNN" in x_iinfo
 
-    if on:
-        return "possibly_live"
-    if off:
-        return "possibly_off"
+        if on:
+            return "possibly_live"
+        if off:
+            return "possibly_off"
     return "unknown"
 
 
