@@ -1,11 +1,14 @@
+import time
 import json
 import logging
 import requests
+from enum import StrEnum
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 URL = "https://www.pokemoncenter.com/en-ca"
+INTERVAL = 120  # seconds
 OBSERVATIONS_PATH = Path("logs/observations.jsonl")
 
 logging.basicConfig(
@@ -15,6 +18,12 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+class QueueState(StrEnum):
+    LIVE = "live"
+    NOT_LIVE = "not_live"
+    UNKNOWN = "unknown"
 
 
 def fetch(url: str):
@@ -57,18 +66,15 @@ def log_observation(response: requests.Response):
 
 
 def detect_queue(response: requests.models.Response):
-    x_iinfo = response.headers.get("X-Iinfo")
+    x_iinfo = response.headers.get("X-Iinfo", "")
 
-    if x_iinfo:
-        on = "B12(14,0,0)" not in x_iinfo and "0NNN" in x_iinfo
+    # Include B12 if it's a confirmed stable marker for live queues
+    if "0NNN" in x_iinfo:
+        return QueueState.LIVE
+    if "NNNN" in x_iinfo and "B12(14,0,0)" in x_iinfo:
+        return QueueState.NOT_LIVE
 
-        off = "B12(14,0,0)" in x_iinfo and "NNNN" in x_iinfo
-
-        if on:
-            return "possibly_live"
-        if off:
-            return "possibly_off"
-    return "unknown"
+    return QueueState.UNKNOWN
 
 
 # Write a function that sends a message to discord.
@@ -79,11 +85,21 @@ def send_discord_message(message: str):
 
 def main():
     print("Starting main function")
+    previous_state = QueueState.UNKNOWN
 
-    response = fetch(URL)
+    while True:
+        response = fetch(URL)
 
-    if response:
-        state = detect_queue(response)
+        if response:
+            state = detect_queue(response)
+
+            if state == QueueState.LIVE and previous_state != QueueState.LIVE:
+                print("Alert users")
+
+            if state != QueueState.UNKNOWN:
+                previous_state = state
+
+        time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":
