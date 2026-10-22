@@ -1,4 +1,5 @@
 import json
+import logging
 import requests
 from pathlib import Path
 from datetime import datetime
@@ -7,6 +8,40 @@ from zoneinfo import ZoneInfo
 URL = "https://www.pokemoncenter.com/en-ca"
 OBSERVATIONS_PATH = Path("logs/observations.jsonl")
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+logger = logging.getLogger(__name__)
+
+
+def fetch(url: str):
+    try:
+        with requests.Session() as session:
+            response = session.get(url, timeout=(10, 30))
+            response.raise_for_status()
+            return response
+    except requests.Timeout:
+        # Back off and retry later
+        logger.exception("Request timed out")
+    except requests.exceptions.SSLError:
+        logger.exception("TLS error")
+    except requests.ConnectionError:
+        # Back off and retry later
+        logger.exception("Connection failed")
+    except requests.HTTPError as error:
+        status = error.response.status_code
+        logger.exception(f"{status} HTTP error")
+        # 403: Suspend checks (stop sending requests)
+        # 429: Respect Retry-After and back off
+        # 5xx: Back off and retry later
+    except requests.RequestException:
+        logger.exception("Request failed")
+
+    return None
+
 
 def log_observation(response: requests.Response):
     observation = {
@@ -14,7 +49,7 @@ def log_observation(response: requests.Response):
         "url": response.url,
         "status": response.status_code,
         "x_iinfo": response.headers.get("X-Iinfo"),
-        "queue": "off",
+        "queue": "off",  # Update this depending on the state of a queue
     }
 
     with OBSERVATIONS_PATH.open("a", encoding="utf-8") as log_file:
@@ -22,13 +57,6 @@ def log_observation(response: requests.Response):
 
 
 def detect_queue(response: requests.models.Response):
-    print("Response Status:", response.status_code)
-    print("--------------------------------------------------------")
-    print("Response Set Cookies:", response.headers["Set-Cookie"])
-    print("--------------------------------------------------------")
-    print("Response X_Iinfo:", response.headers["X-Iinfo"])
-    print("--------------------------------------------------------")
-    print("Response Text:", response.text)
     x_iinfo = response.headers.get("X-Iinfo")
 
     if x_iinfo:
@@ -52,38 +80,10 @@ def send_discord_message(message: str):
 def main():
     print("Starting main function")
 
-    try:
-        with requests.Session() as session:
-            response = session.get(URL, timeout=(10, 30))
-            response.raise_for_status()
-            state = detect_queue(response)
-            if state == "possibly_live":
-                send_discord_message("Queue is live!")
-            if state == "possibly_off":
-                print("Retry again after a minute")
-            if state == "unknown":
-                raise Exception("Queue state is unknown")
-    except requests.Timeout:
-        # Back off and retry later
-        print("Request timed out")
-    except requests.exceptions.SSLError as error:
-        # Log it and keep certificate verification enabled
-        print(f"TLS error: {error}")
-    except requests.ConnectionError as error:
-        # Back off and retry later
-        print(f"Connection failed: {error}")
-    except requests.HTTPError as error:
-        status = error.response.status_code
-        print(f"HTTP error: {status}")
-        # 403: suspend checks
-        # 429: respect Retry-After and back off
-        # 5xx: retry later with backoff
-    except requests.RequestException as error:
-        # Log the failure
-        print(f"Request failed: {error}")
-    except Exception as error:
-        # Queue errors
-        print("Queue state:", error)
+    response = fetch(URL)
+
+    if response:
+        state = detect_queue(response)
 
 
 if __name__ == "__main__":
