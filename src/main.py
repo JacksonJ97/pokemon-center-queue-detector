@@ -53,14 +53,16 @@ def retry_after_delay(response: requests.Response) -> int:
         return 0
 
 
-def log_observation(response: requests.Response):
+def log_observation(response: requests.Response, queue_state: QueueState) -> None:
     observation = {
         "timestamp": datetime.now(TIMEZONE).isoformat(),
         "url": response.url,
         "status": response.status_code,
-        "x_iinfo": response.headers.get("X-Iinfo"),
-        "queue": "off",  # Update this depending on the state of a queue
+        "x_iinfo": response.headers.get("X-Iinfo", ""),
+        "queue": queue_state,
     }
+
+    OBSERVATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     with OBSERVATIONS_PATH.open("a", encoding="utf-8") as log_file:
         log_file.write(json.dumps(observation) + "\n")
@@ -94,6 +96,10 @@ def main() -> None:
         try:
             with requests.Session() as session:
                 response = session.get(URL, timeout=(10, 30))
+
+                if response.status_code >= 400:
+                    log_observation(response=response, queue_state=QueueState.UNKNOWN)
+
                 response.raise_for_status()
         except requests.RequestException as error:
             consecutive_fails += 1
@@ -126,15 +132,18 @@ def main() -> None:
         consecutive_fails = 0
         state = detect_queue(response)
 
-        if state == QueueState.LIVE and previous_state != QueueState.LIVE:
-            # Alert users
-            time.sleep(COOLDOWN - INTERVAL)
-
-        if state == QueueState.UNKNOWN:
-            # Log a response observation
-            logger.info("Queue state unknown")
-        else:
+        if state == QueueState.LIVE:
+            if previous_state != QueueState.LIVE:
+                # Alert users
+                log_observation(response=response, queue_state=state)
+                time.sleep(COOLDOWN - INTERVAL)
             previous_state = state
+        elif state == QueueState.NOT_LIVE:
+            log_observation(response=response, queue_state=state)
+            previous_state = state
+        else:
+            log_observation(response=response, queue_state=state)
+            logger.info("Queue state unknown")
 
         time.sleep(INTERVAL)
 
