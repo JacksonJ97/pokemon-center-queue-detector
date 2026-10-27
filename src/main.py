@@ -83,7 +83,7 @@ def detect_queue(response: requests.Response) -> QueueState:
     return QueueState.UNKNOWN
 
 
-def send_discord_queue_alert() -> bool | None:
+def notify_queue_live() -> bool | None:
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
@@ -91,7 +91,7 @@ def send_discord_queue_alert() -> bool | None:
             response = requests.post(
                 ALERT_WEBHOOK_URL,
                 json={
-                    "content": f"@everyone Queue is live!",
+                    "content": "@everyone 🚨 Pokémon Center queue is live! https://www.pokemoncenter.com/en-ca",
                     "allowed_mentions": {"parse": ["everyone"]},
                 },
                 timeout=10,
@@ -121,7 +121,7 @@ def send_discord_queue_alert() -> bool | None:
             time.sleep(delay)
 
 
-def send_discord_error_alert() -> bool | None:
+def notify_monitor_stopped() -> bool | None:
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
@@ -129,7 +129,7 @@ def send_discord_error_alert() -> bool | None:
             response = requests.post(
                 ERROR_WEBHOOK_URL,
                 json={
-                    "content": "Program exited, restart the program.",
+                    "content": "⚠️ Pokémon Center monitoring stopped due to an error. Check the logs and restart the monitor.",
                     "allowed_mentions": {"parse": []},
                 },
                 timeout=10,
@@ -180,7 +180,7 @@ def main() -> None:
 
             if consecutive_fails >= MAX_CONSECUTIVE_FAILURES:
                 logger.error("Exited after %s consecutive failures", consecutive_fails)
-                send_discord_error_alert()
+                notify_monitor_stopped()
                 break
 
             retry_delay = INTERVAL * consecutive_fails
@@ -193,7 +193,7 @@ def main() -> None:
 
                     if status not in (408, 429) and status < 500:
                         logger.error("Exited after HTTP %s", status)
-                        send_discord_error_alert()
+                        notify_monitor_stopped()
                         break
 
                     retry_delay = max(retry_delay, retry_after_delay(response))
@@ -207,7 +207,7 @@ def main() -> None:
 
         if state == QueueState.LIVE:
             if previous_state != QueueState.LIVE:
-                if not send_discord_queue_alert():
+                if not notify_queue_live():
                     time.sleep(INTERVAL)
                     continue
 
