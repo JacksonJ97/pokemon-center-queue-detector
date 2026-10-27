@@ -84,13 +84,17 @@ def detect_queue(response: requests.Response) -> QueueState:
 
 
 def send_discord_message(
-    webhook_url: str, message: str, alert_type: str, mention_everyone: bool
+    alert_type: str,
+    session: requests.Session,
+    webhook_url: str,
+    message: str,
+    mention_everyone: bool,
 ) -> bool:
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
         try:
-            response = requests.post(
+            response = session.post(
                 webhook_url,
                 json={
                     "content": message,
@@ -139,20 +143,22 @@ def send_discord_message(
     return False
 
 
-def notify_queue_live() -> bool:
+def notify_queue_live(session: requests.Session) -> bool:
     return send_discord_message(
+        alert_type="queue",
+        session=session,
         webhook_url=ALERT_WEBHOOK_URL,
         message="@everyone 🚨 Pokémon Center queue is live!",
-        alert_type="queue",
         mention_everyone=True,
     )
 
 
-def notify_monitor_stopped() -> bool:
+def notify_monitor_stopped(session: requests.Session) -> bool:
     return send_discord_message(
+        alert_type="error",
+        session=session,
         webhook_url=ERROR_WEBHOOK_URL,
         message="⚠️ Pokémon Center monitoring stopped due to an error. Check the logs and restart the monitor.",
-        alert_type="error",
         mention_everyone=False,
     )
 
@@ -163,64 +169,66 @@ def main() -> None:
     consecutive_fails = 0
     previous_state = QueueState.UNKNOWN
 
-    while START_TIME <= datetime.now(TIMEZONE).time() < END_TIME:
-        try:
-            with requests.Session() as session:
-                response = session.get(URL, timeout=(10, 30))
+    with requests.Session() as monitor_session, requests.Session() as discord_session:
+        while START_TIME <= datetime.now(TIMEZONE).time() < END_TIME:
+            try:
+                response = monitor_session.get(URL, timeout=(10, 30))
 
                 if response.status_code >= 400:
                     log_observation(response=response, queue_state=QueueState.UNKNOWN)
 
                 response.raise_for_status()
-        except requests.RequestException as error:
-            consecutive_fails += 1
-            logger.exception("Request failed: %s", error)
+            except requests.RequestException as error:
+                consecutive_fails += 1
+                logger.exception("Request failed: %s", error)
 
-            if consecutive_fails >= MAX_CONSECUTIVE_FAILURES:
-                logger.error("Exited after %s consecutive failures", consecutive_fails)
-                notify_monitor_stopped()
-                break
+                if consecutive_fails >= MAX_CONSECUTIVE_FAILURES:
+                    logger.error(
+                        "Exited after %s consecutive failures", consecutive_fails
+                    )
+                    notify_monitor_stopped(session=discord_session)
+                    break
 
-            retry_delay = INTERVAL * consecutive_fails
+                retry_delay = INTERVAL * consecutive_fails
 
-            if isinstance(error, requests.HTTPError):
-                response = error.response
+                if isinstance(error, requests.HTTPError):
+                    response = error.response
 
-                if isinstance(response, requests.Response):
-                    status = response.status_code
+                    if isinstance(response, requests.Response):
+                        status = response.status_code
 
-                    if status not in (408, 429) and status < 500:
-                        logger.error("Exited after HTTP %s", status)
-                        notify_monitor_stopped()
-                        break
+                        if status not in (408, 429) and status < 500:
+                            logger.error("Exited after HTTP %s", status)
+                            notify_monitor_stopped(session=discord_session)
+                            break
 
-                    retry_delay = max(retry_delay, retry_after_delay(response))
+                        retry_delay = max(retry_delay, retry_after_delay(response))
 
-            logger.warning("Retrying in %s seconds", retry_delay)
-            time.sleep(retry_delay)
-            continue
+                logger.warning("Retrying in %s seconds", retry_delay)
+                time.sleep(retry_delay)
+                continue
 
-        consecutive_fails = 0
-        state = detect_queue(response)
+            consecutive_fails = 0
+            state = detect_queue(response)
 
-        if state == QueueState.LIVE:
-            if previous_state != QueueState.LIVE:
-                if not notify_queue_live():
-                    time.sleep(INTERVAL)
-                    continue
+            if state == QueueState.LIVE:
+                if previous_state != QueueState.LIVE:
+                    if not notify_queue_live(session=discord_session):
+                        time.sleep(INTERVAL)
+                        continue
 
+                    log_observation(response=response, queue_state=state)
+                    time.sleep(COOLDOWN - INTERVAL)
+
+                previous_state = state
+            elif state == QueueState.NOT_LIVE:
                 log_observation(response=response, queue_state=state)
-                time.sleep(COOLDOWN - INTERVAL)
+                previous_state = state
+            else:
+                log_observation(response=response, queue_state=state)
+                logger.info("Queue state unknown")
 
-            previous_state = state
-        elif state == QueueState.NOT_LIVE:
-            log_observation(response=response, queue_state=state)
-            previous_state = state
-        else:
-            log_observation(response=response, queue_state=state)
-            logger.info("Queue state unknown")
-
-        time.sleep(INTERVAL)
+            time.sleep(INTERVAL)
 
 
 if __name__ == "__main__":
