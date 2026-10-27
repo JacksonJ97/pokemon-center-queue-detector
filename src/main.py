@@ -18,8 +18,6 @@ START_TIME = datetime_time(10)
 END_TIME = datetime_time(16)
 TIMEZONE = ZoneInfo("America/Toronto")
 OBSERVATIONS_PATH = Path("logs/observations.jsonl")
-ALERT_WEBHOOK_URL = os.environ["ALERT_WEBHOOK_URL"]
-ERROR_WEBHOOK_URL = os.environ["ERROR_WEBHOOK_URL"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -143,21 +141,21 @@ def send_discord_message(
     return False
 
 
-def notify_queue_live(session: requests.Session) -> bool:
+def notify_queue_live(session: requests.Session, webhook_url: str) -> bool:
     return send_discord_message(
         alert_type="queue",
         session=session,
-        webhook_url=ALERT_WEBHOOK_URL,
+        webhook_url=webhook_url,
         message="@everyone 🚨 Pokémon Center queue is live!",
         mention_everyone=True,
     )
 
 
-def notify_monitor_stopped(session: requests.Session) -> bool:
+def notify_monitor_stopped(session: requests.Session, webhook_url: str) -> bool:
     return send_discord_message(
         alert_type="error",
         session=session,
-        webhook_url=ERROR_WEBHOOK_URL,
+        webhook_url=webhook_url,
         message="⚠️ Pokémon Center monitoring stopped due to an error. Check the logs and restart the monitor.",
         mention_everyone=False,
     )
@@ -165,6 +163,9 @@ def notify_monitor_stopped(session: requests.Session) -> bool:
 
 def main() -> None:
     logger.info("Starting monitor")
+
+    alert_webhook_url = os.environ["ALERT_WEBHOOK_URL"]
+    error_webhook_url = os.environ["ERROR_WEBHOOK_URL"]
 
     consecutive_fails = 0
     previous_state = QueueState.UNKNOWN
@@ -186,23 +187,24 @@ def main() -> None:
                     logger.error(
                         "Exited after %s consecutive failures", consecutive_fails
                     )
-                    notify_monitor_stopped(session=discord_session)
+                    notify_monitor_stopped(
+                        session=discord_session, webhook_url=error_webhook_url
+                    )
                     break
 
                 retry_delay = INTERVAL * consecutive_fails
 
                 if isinstance(error, requests.HTTPError):
-                    response = error.response
+                    status_code = error.response.status_code
 
-                    if isinstance(response, requests.Response):
-                        status = response.status_code
+                    if status_code not in (408, 429) and status_code < 500:
+                        logger.error("Exited after HTTP %s", status_code)
+                        notify_monitor_stopped(
+                            session=discord_session, webhook_url=error_webhook_url
+                        )
+                        break
 
-                        if status not in (408, 429) and status < 500:
-                            logger.error("Exited after HTTP %s", status)
-                            notify_monitor_stopped(session=discord_session)
-                            break
-
-                        retry_delay = max(retry_delay, retry_after_delay(response))
+                    retry_delay = max(retry_delay, retry_after_delay(error.response))
 
                 logger.warning("Retrying in %s seconds", retry_delay)
                 time.sleep(retry_delay)
@@ -215,7 +217,9 @@ def main() -> None:
                 if previous_state != QueueState.LIVE:
                     log_observation(response=response, queue_state=state)
 
-                    if not notify_queue_live(session=discord_session):
+                    if not notify_queue_live(
+                        session=discord_session, webhook_url=alert_webhook_url
+                    ):
                         time.sleep(INTERVAL)
                         continue
 
