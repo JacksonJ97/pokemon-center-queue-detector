@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import logging
@@ -17,6 +18,8 @@ START_TIME = datetime_time(10)
 END_TIME = datetime_time(16)
 TIMEZONE = ZoneInfo("America/Toronto")
 OBSERVATIONS_PATH = Path("logs/observations.jsonl")
+ALERT_WEBHOOK_URL = os.environ["ALERT_WEBHOOK_URL"]
+ERROR_WEBHOOK_URL = os.environ["ERROR_WEBHOOK_URL"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,10 +83,80 @@ def detect_queue(response: requests.Response) -> QueueState:
     return QueueState.UNKNOWN
 
 
-# Write a function that sends a message to discord.
-def send_discord_message(message: str):
-    # Placeholder implementation - replace with actual Discord message sending logic
-    print(f"Sending message to Discord: {message}")
+def send_discord_queue_alert() -> bool | None:
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(
+                ALERT_WEBHOOK_URL,
+                json={
+                    "content": f"@everyone Queue is live!",
+                    "allowed_mentions": {"parse": ["everyone"]},
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            return True
+        except requests.RequestException as error:
+            logger.error("Failed to send queue alert: %s", type(error).__name__)
+            logger.warning("Queue alert attempt %s/%s", attempt, max_attempts)
+
+            delay = 2 ** (attempt - 1)
+
+            if isinstance(error, requests.HTTPError):
+                response = error.response
+
+                if isinstance(response, requests.Response):
+                    status = response.status_code
+
+                    if status != 429 and status < 500:
+                        return False
+
+                    delay = max(delay, retry_after_delay(response))
+
+            if attempt == max_attempts:
+                return False
+
+            time.sleep(delay)
+
+
+def send_discord_error_alert() -> bool | None:
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests.post(
+                ERROR_WEBHOOK_URL,
+                json={
+                    "content": "Program exited, restart the program.",
+                    "allowed_mentions": {"parse": []},
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            return True
+        except requests.RequestException as error:
+            logger.error("Failed to send error alert: %s", type(error).__name__)
+            logger.warning("Error alert attempt %s/%s", attempt, max_attempts)
+
+            delay = 2 ** (attempt - 1)
+
+            if isinstance(error, requests.HTTPError):
+                response = error.response
+
+                if isinstance(response, requests.Response):
+                    status = response.status_code
+
+                    if status != 429 and status < 500:
+                        return False
+
+                    delay = max(delay, retry_after_delay(response))
+
+            if attempt == max_attempts:
+                return False
+
+            time.sleep(delay)
 
 
 def main() -> None:
@@ -107,7 +180,7 @@ def main() -> None:
 
             if consecutive_fails >= MAX_CONSECUTIVE_FAILURES:
                 logger.error("Exited after %s consecutive failures", consecutive_fails)
-                # Alert that the program exited
+                send_discord_error_alert()
                 break
 
             retry_delay = INTERVAL * consecutive_fails
@@ -120,7 +193,7 @@ def main() -> None:
 
                     if status not in (408, 429) and status < 500:
                         logger.error("Exited after HTTP %s", status)
-                        # Alert that the program exited
+                        send_discord_error_alert()
                         break
 
                     retry_delay = max(retry_delay, retry_after_delay(response))
@@ -134,9 +207,13 @@ def main() -> None:
 
         if state == QueueState.LIVE:
             if previous_state != QueueState.LIVE:
-                # Alert users
+                if not send_discord_queue_alert():
+                    time.sleep(INTERVAL)
+                    continue
+
                 log_observation(response=response, queue_state=state)
                 time.sleep(COOLDOWN - INTERVAL)
+
             previous_state = state
         elif state == QueueState.NOT_LIVE:
             log_observation(response=response, queue_state=state)
