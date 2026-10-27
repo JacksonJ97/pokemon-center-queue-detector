@@ -83,80 +83,78 @@ def detect_queue(response: requests.Response) -> QueueState:
     return QueueState.UNKNOWN
 
 
-def notify_queue_live() -> bool | None:
+def send_discord_message(
+    webhook_url: str, message: str, alert_type: str, mention_everyone: bool
+) -> bool:
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
         try:
             response = requests.post(
-                ALERT_WEBHOOK_URL,
+                webhook_url,
                 json={
-                    "content": "@everyone 🚨 Pokémon Center queue is live! https://www.pokemoncenter.com/en-ca",
-                    "allowed_mentions": {"parse": ["everyone"]},
+                    "content": message,
+                    "allowed_mentions": {
+                        "parse": ["everyone"] if mention_everyone else []
+                    },
                 },
                 timeout=10,
             )
             response.raise_for_status()
             return True
         except requests.RequestException as error:
-            logger.error("Failed to send queue alert: %s", type(error).__name__)
-            logger.warning("Queue alert attempt %s/%s", attempt, max_attempts)
-
-            delay = 2 ** (attempt - 1)
-
-            if isinstance(error, requests.HTTPError):
-                response = error.response
-
-                if isinstance(response, requests.Response):
-                    status = response.status_code
-
-                    if status != 429 and status < 500:
-                        return False
-
-                    delay = max(delay, retry_after_delay(response))
-
-            if attempt == max_attempts:
-                return False
-
-            time.sleep(delay)
-
-
-def notify_monitor_stopped() -> bool | None:
-    max_attempts = 3
-
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = requests.post(
-                ERROR_WEBHOOK_URL,
-                json={
-                    "content": "⚠️ Pokémon Center monitoring stopped due to an error. Check the logs and restart the monitor.",
-                    "allowed_mentions": {"parse": []},
-                },
-                timeout=10,
+            logger.warning(
+                "Discord %s alert attempt %s/%s failed: %s",
+                alert_type,
+                attempt,
+                max_attempts,
+                type(error).__name__,
             )
-            response.raise_for_status()
-            return True
-        except requests.RequestException as error:
-            logger.error("Failed to send error alert: %s", type(error).__name__)
-            logger.warning("Error alert attempt %s/%s", attempt, max_attempts)
 
-            delay = 2 ** (attempt - 1)
+            retry_delay = 2 ** (attempt - 1)
 
             if isinstance(error, requests.HTTPError):
-                response = error.response
+                status_code = error.response.status_code
 
-                if isinstance(response, requests.Response):
-                    status = response.status_code
+                if status_code != 429 and status_code < 500:
+                    logger.error(
+                        "Discord %s alert delivery failed: HTTP %s",
+                        alert_type,
+                        status_code,
+                    )
+                    return False
 
-                    if status != 429 and status < 500:
-                        return False
-
-                    delay = max(delay, retry_after_delay(response))
+                retry_delay = max(retry_delay, retry_after_delay(error.response))
 
             if attempt == max_attempts:
+                logger.error(
+                    "Discord %s alert delivery failed after %s attempts",
+                    alert_type,
+                    max_attempts,
+                )
                 return False
 
-            time.sleep(delay)
+            time.sleep(retry_delay)
+
+    return False
+
+
+def notify_queue_live() -> bool:
+    return send_discord_message(
+        webhook_url=ALERT_WEBHOOK_URL,
+        message="@everyone 🚨 Pokémon Center queue is live!",
+        alert_type="queue",
+        mention_everyone=True,
+    )
+
+
+def notify_monitor_stopped() -> bool:
+    return send_discord_message(
+        webhook_url=ERROR_WEBHOOK_URL,
+        message="⚠️ Pokémon Center monitoring stopped due to an error. Check the logs and restart the monitor.",
+        alert_type="error",
+        mention_everyone=False,
+    )
 
 
 def main() -> None:
