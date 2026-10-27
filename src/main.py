@@ -106,16 +106,12 @@ def send_discord_message(
             return True
         except requests.RequestException as error:
             logger.warning(
-                "Discord %s alert attempt %s/%s failed: %s",
-                alert_type,
-                attempt,
-                max_attempts,
-                type(error).__name__,
+                "Discord %s alert attempt failed: %s", alert_type, type(error).__name__
             )
 
             retry_delay = 2 ** (attempt - 1)
 
-            if isinstance(error, requests.HTTPError):
+            if isinstance(error, requests.HTTPError) and error.response is not None:
                 status_code = error.response.status_code
 
                 if status_code != 429 and status_code < 500:
@@ -190,7 +186,7 @@ def main() -> None:
 
                 retry_delay = INTERVAL * consecutive_fails
 
-                if isinstance(error, requests.HTTPError):
+                if isinstance(error, requests.HTTPError) and error.response is not None:
                     status_code = error.response.status_code
 
                     if status_code not in (408, 429) and status_code < 500:
