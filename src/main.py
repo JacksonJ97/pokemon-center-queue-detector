@@ -11,11 +11,11 @@ from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, time as datetime_time
 
 URL = "https://www.pokemoncenter.com/en-ca"
-INTERVAL = 120  # 2 minutes in seconds
-COOLDOWN = 60 * 60  # 1 hour in seconds
+INTERVAL = 90  # 1 min 30 secs
+COOLDOWN = 60 * 60  # 1 hour
 MAX_CONSECUTIVE_FAILURES = 3
-START_TIME = datetime_time(10)
-END_TIME = datetime_time(16)
+START_TIME = datetime_time(9)  # 9:00 am
+END_TIME = datetime_time(17)  # 5:00 pm
 TIMEZONE = ZoneInfo("America/Toronto")
 OBSERVATIONS_PATH = Path("logs/observations.jsonl")
 
