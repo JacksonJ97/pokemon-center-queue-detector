@@ -173,10 +173,10 @@ def main() -> None:
     with requests.Session() as monitor_session, requests.Session() as discord_session:
         while START_TIME <= datetime.now(TIMEZONE).time() < END_TIME:
             try:
-                response = monitor_session.get(URL, timeout=(10, 30))
+                response = monitor_session.get(URL, timeout=10)
 
                 if response.status_code >= 400:
-                    log_observation(response=response, queue_state=QueueState.UNKNOWN)
+                    log_observation(response, QueueState.UNKNOWN)
 
                 response.raise_for_status()
             except requests.RequestException as error:
@@ -184,12 +184,8 @@ def main() -> None:
                 logger.exception("Request failed: %s", error)
 
                 if consecutive_fails >= MAX_CONSECUTIVE_FAILURES:
-                    logger.error(
-                        "Exited after %s consecutive failures", consecutive_fails
-                    )
-                    notify_monitor_stopped(
-                        session=discord_session, webhook_url=error_webhook_url
-                    )
+                    logger.error("Stopped after %s failures", consecutive_fails)
+                    notify_monitor_stopped(discord_session, error_webhook_url)
                     break
 
                 retry_delay = INTERVAL * consecutive_fails
@@ -198,10 +194,8 @@ def main() -> None:
                     status_code = error.response.status_code
 
                     if status_code not in (408, 429) and status_code < 500:
-                        logger.error("Exited after HTTP %s", status_code)
-                        notify_monitor_stopped(
-                            session=discord_session, webhook_url=error_webhook_url
-                        )
+                        logger.error("Stopped after HTTP %s", status_code)
+                        notify_monitor_stopped(discord_session, error_webhook_url)
                         break
 
                     retry_delay = max(retry_delay, retry_after_delay(error.response))
@@ -215,11 +209,9 @@ def main() -> None:
 
             if state == QueueState.LIVE:
                 if previous_state != QueueState.LIVE:
-                    log_observation(response=response, queue_state=state)
+                    log_observation(response, state)
 
-                    if not notify_queue_live(
-                        session=discord_session, webhook_url=alert_webhook_url
-                    ):
+                    if not notify_queue_live(discord_session, alert_webhook_url):
                         time.sleep(INTERVAL)
                         continue
 
@@ -227,11 +219,11 @@ def main() -> None:
 
                 previous_state = state
             elif state == QueueState.NOT_LIVE:
-                log_observation(response=response, queue_state=state)
+                log_observation(response, state)
                 previous_state = state
             else:
-                log_observation(response=response, queue_state=state)
-                logger.info("Queue state unknown")
+                log_observation(response, state)
+                logger.info("Unknown queue state")
 
             time.sleep(INTERVAL)
 
