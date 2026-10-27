@@ -213,11 +213,12 @@ def main() -> None:
 
             if state == QueueState.LIVE:
                 if previous_state != QueueState.LIVE:
+                    log_observation(response=response, queue_state=state)
+
                     if not notify_queue_live(session=discord_session):
                         time.sleep(INTERVAL)
                         continue
 
-                    log_observation(response=response, queue_state=state)
                     time.sleep(COOLDOWN - INTERVAL)
 
                 previous_state = state
