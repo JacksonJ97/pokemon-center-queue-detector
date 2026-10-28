@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import logging
@@ -19,11 +20,44 @@ END_TIME = datetime_time(17)  # 5:00 pm
 TIMEZONE = ZoneInfo("America/Toronto")
 OBSERVATIONS_PATH = Path("logs/observations.jsonl")
 
+
+class RailwayFormatter(logging.Formatter):
+    def format(self, record):
+        level = {
+            "WARNING": "warn",
+            "CRITICAL": "error",
+        }.get(record.levelname, record.levelname.lower())
+
+        entry = {
+            "level": level,
+            "message": record.getMessage(),
+        }
+
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+
+        return json.dumps(entry)
+
+
+handler = logging.StreamHandler(sys.stdout)
+
+
+if os.getenv("RAILWAY_ENVIRONMENT_ID"):
+    handler.setFormatter(RailwayFormatter())
+else:
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[handler],
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +96,8 @@ def log_observation(response: requests.Response, queue_state: QueueState) -> Non
         "x_iinfo": response.headers.get("X-Iinfo", ""),
         "queue": queue_state,
     }
+
+    logger.info(json.dumps(observation))
 
     OBSERVATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
